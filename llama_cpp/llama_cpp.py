@@ -9,6 +9,7 @@ from ctypes import (
     c_int32,
     c_uint8,
     c_uint32,
+    c_int64,
     c_size_t,
     c_float,
     c_double,
@@ -16,6 +17,7 @@ from ctypes import (
     POINTER,
     _Pointer,  # type: ignore
     Structure,
+    Union as CtypesUnion,
     Array,
 )
 import pathlib
@@ -60,6 +62,9 @@ def _load_shared_library(lib_base_name: str):
         if "CUDA_PATH" in os.environ:
             os.add_dll_directory(os.path.join(os.environ["CUDA_PATH"], "bin"))
             os.add_dll_directory(os.path.join(os.environ["CUDA_PATH"], "lib"))
+        if "HIP_PATH" in os.environ:
+            os.add_dll_directory(os.path.join(os.environ["HIP_PATH"], "bin"))
+            os.add_dll_directory(os.path.join(os.environ["HIP_PATH"], "lib"))
         cdll_args["winmode"] = ctypes.RTLD_GLOBAL
 
     # Try to load the shared library, handling potential errors
@@ -88,9 +93,7 @@ c_size_t_p = POINTER(c_size_t)
 
 # llama.h bindings
 
-GGML_USE_CUBLAS = hasattr(_lib, "ggml_init_cublas")
-GGML_CUDA_MAX_DEVICES = 16
-LLAMA_MAX_DEVICES = GGML_CUDA_MAX_DEVICES if GGML_USE_CUBLAS else 1
+LLAMA_MAX_DEVICES = _lib.llama_max_devices()
 
 # define LLAMA_DEFAULT_SEED 0xFFFFFFFF
 LLAMA_DEFAULT_SEED = 0xFFFFFFFF
@@ -252,8 +255,8 @@ class llama_token_data_array(Structure):
 
 llama_token_data_array_p = POINTER(llama_token_data_array)
 
-# typedef void (*llama_progress_callback)(float progress, void *ctx);
-llama_progress_callback = ctypes.CFUNCTYPE(None, c_float, c_void_p)
+# typedef bool (*llama_progress_callback)(float progress, void *ctx);
+llama_progress_callback = ctypes.CFUNCTYPE(c_bool, c_float, c_void_p)
 
 
 # // Input data for llama_decode
@@ -317,12 +320,9 @@ class llama_batch(Structure):
 #     LLAMA_KV_OVERRIDE_FLOAT,
 #     LLAMA_KV_OVERRIDE_BOOL,
 # };
-class llama_model_kv_override_type(Structure):
-    _fields_ = [
-        ("LLAMA_KV_OVERRIDE_INT", c_int),
-        ("LLAMA_KV_OVERRIDE_FLOAT", c_int),
-        ("LLAMA_KV_OVERRIDE_BOOL", c_int),
-    ]
+LLAMA_KV_OVERRIDE_INT = 0
+LLAMA_KV_OVERRIDE_FLOAT = 1
+LLAMA_KV_OVERRIDE_BOOL = 2
 
 # struct llama_model_kv_override {
 #     char key[128];
@@ -333,13 +333,18 @@ class llama_model_kv_override_type(Structure):
 #         bool bool_value;
 #     };
 # };
+class llama_model_kv_override_value(CtypesUnion):
+    _fields_ = [
+        ("int_value", c_int64),
+        ("float_value", c_double),
+        ("bool_value", c_bool),
+    ]
+
 class llama_model_kv_override(Structure):
     _fields_ = [
         ("key", ctypes.c_char * 128),
-        ("tag", llama_model_kv_override_type),
-        ("int_value", ctypes.c_int64),
-        ("float_value", c_double),
-        ("bool_value", c_bool),
+        ("tag", c_int),
+        ("value", llama_model_kv_override_value),
     ]
 
 # struct llama_model_params {
@@ -347,7 +352,9 @@ class llama_model_kv_override(Structure):
 #     int32_t main_gpu;     // the GPU that is used for scratch and small tensors
 #     const float * tensor_split; // how to split layers across multiple GPUs (size: LLAMA_MAX_DEVICES)
 
-#     // called with a progress value between 0 and 1, pass NULL to disable
+#     // Called with a progress value between 0.0 and 1.0. Pass NULL to disable.
+#     // If the provided progress_callback returns true, model loading continues.
+#     // If it returns false, model loading is immediately aborted.
 #     llama_progress_callback progress_callback;
 #     // context pointer passed to the progress callback
 #     void * progress_callback_user_data;
@@ -367,7 +374,7 @@ class llama_model_params(Structure):
         n_gpu_layers (int): number of layers to store in VRAM
         main_gpu (int): the GPU that is used for scratch and small tensors
         tensor_split (ctypes.Array[ctypes.c_float]): how to split layers across multiple GPUs (size: LLAMA_MAX_DEVICES)
-        progress_callback (llama_progress_callback): called with a progress value between 0 and 1, pass NULL to disable
+        progress_callback (llama_progress_callback): called with a progress value between 0.0 and 1.0. Pass NULL to disable. If the provided progress_callback returns true, model loading continues. If it returns false, model loading is immediately aborted.
         progress_callback_user_data (ctypes.c_void_p): context pointer passed to the progress callback
         kv_overrides (ctypes.Array[llama_model_kv_override]): override key-value pairs of the model meta data
         vocab_only (bool): only load the vocabulary, no weights
@@ -733,8 +740,14 @@ def llama_n_ctx(ctx: llama_context_p) -> int:
 
 
 _lib.llama_n_ctx.argtypes = [llama_context_p]
-_lib.llama_n_ctx.restype = c_int
+_lib.llama_n_ctx.restype = c_uint32
 
+# LLAMA_API uint32_t llama_n_batch    (const struct llama_context * ctx);
+def llama_n_batch(ctx: llama_context_p) -> int:
+    return _lib.llama_n_batch(ctx)
+
+_lib.llama_n_batch.argtypes = [llama_context_p]
+_lib.llama_n_batch.restype = c_uint32
 
 # LLAMA_API enum llama_vocab_type llama_vocab_type(const struct llama_model * model);
 def llama_vocab_type(model: llama_model_p) -> int:
