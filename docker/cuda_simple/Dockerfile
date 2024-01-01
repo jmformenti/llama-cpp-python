@@ -5,6 +5,7 @@ ARG VIRTUAL_ENV_DIR=/opt/env
 FROM nvidia/cuda:${CUDA_BUILDER_IMAGE} AS builder
 
 ARG VIRTUAL_ENV_DIR
+ARG SERVER_VERSION=0.2.26
 
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y git build-essential \
@@ -21,7 +22,7 @@ RUN python3 -m venv ${VIRTUAL_ENV_DIR}
 ENV PATH=${VIRTUAL_ENV_DIR}/bin:$PATH
 
 # Install llama-cpp-python (build with cuda)
-RUN CMAKE_ARGS="-DLLAMA_CUBLAS=on" pip install llama-cpp-python[server]
+RUN CMAKE_ARGS="-DLLAMA_CUBLAS=on" pip install llama-cpp-python[server]==${SERVER_VERSION}
 
 
 FROM nvidia/cuda:${CUDA_RUNTIME_IMAGE}
